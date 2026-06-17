@@ -16,7 +16,7 @@ export default function App() {
             <div className="w-7 h-7 bg-accent rounded-lg flex items-center justify-center">
               <Zap size={14} className="text-white" />
             </div>
-            <span className="font-bold text-ink tracking-tight">MatchIQ</span>
+            <span className="font-bold text-ink tracking-tight">ResumeMatcher</span>
           </div>
           <span className="text-xs text-slate-mid font-medium">Resume × JD Analyzer</span>
         </div>
