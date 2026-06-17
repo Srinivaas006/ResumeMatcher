@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-slate-faint text-ink font-sans;
+  }
+
+  ::selection {
+    @apply bg-accent text-white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-light;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-mid rounded-full;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-slate-light rounded-2xl;
+  }
+  .label-tag {
+    @apply inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full;
+  }
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-widest text-slate-mid mb-4;
+  }
+}
