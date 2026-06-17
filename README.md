@@ -1,4 +1,4 @@
-# MatchIQ — Resume × JD Analyzer
+# ResumeMatcher — Resume × JD Analyzer
 
 An AI-powered tool that scores your resume against a job description, identifies skill gaps, missing ATS keywords, and generates tailored interview prep questions.
 
