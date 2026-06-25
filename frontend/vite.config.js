@@ -8,6 +8,8 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/analyze': 'http://backend:8000',
+      '/roadmap': 'http://backend:8000',
+      '/analyze-github': 'http://backend:8000',
       '/health': 'http://backend:8000',
     }
   },
