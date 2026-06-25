@@ -13,7 +13,7 @@ app = FastAPI(title="Resume Matcher API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://frontend:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,20 +198,27 @@ async def analyze_github(
     username = github_username.strip().lstrip("https://github.com/").strip("/")
 
     # Fetch GitHub data via public API
+    github_token = os.environ.get("GITHUB_TOKEN")
+    gh_headers = {"Accept": "application/vnd.github.v3+json"}
+    if github_token:
+        gh_headers["Authorization"] = f"Bearer {github_token}"
+
     async with httpx.AsyncClient(timeout=15) as http:
         try:
             user_resp = await http.get(
                 f"https://api.github.com/users/{username}",
-                headers={"Accept": "application/vnd.github.v3+json"},
+                headers=gh_headers,
             )
             if user_resp.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"GitHub user '{username}' not found.")
+            if user_resp.status_code == 403:
+                raise HTTPException(status_code=503, detail="GitHub API rate limit exceeded. Please try again later.")
             user_resp.raise_for_status()
             user_data = user_resp.json()
 
             repos_resp = await http.get(
                 f"https://api.github.com/users/{username}/repos?sort=updated&per_page=30",
-                headers={"Accept": "application/vnd.github.v3+json"},
+                headers=gh_headers,
             )
             repos_resp.raise_for_status()
             repos = repos_resp.json()
