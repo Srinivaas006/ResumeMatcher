@@ -232,69 +232,140 @@ async def analyze_github(
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Failed to fetch GitHub data: {str(e)}")
 
-    # Summarize repo data for AI (avoid sending too much)
+    # Fetch README existence for top 5 repos (real check, not assumed)
     repo_summaries = []
-    for r in repos[:15]:
-        repo_summaries.append({
-            "name": r.get("name"),
-            "description": r.get("description") or "",
-            "language": r.get("language") or "Unknown",
-            "stars": r.get("stargazers_count", 0),
-            "forks": r.get("forks_count", 0),
-            "has_readme": True,  # assume true; checking each would need extra API calls
-            "topics": r.get("topics", []),
-            "updated_at": r.get("updated_at", "")[:10],
-        })
+    async with httpx.AsyncClient(timeout=15) as http2:
+        for r in repos[:10]:
+            has_desc = bool(r.get("description", "").strip())
+            has_topics = len(r.get("topics", [])) > 0
+            stars = r.get("stargazers_count", 0)
+            forks = r.get("forks_count", 0)
+            # Check README existence for top 5 repos only
+            has_readme = False
+            if len(repo_summaries) < 5:
+                try:
+                    rm = await http2.get(
+                        f"https://api.github.com/repos/{username}/{r['name']}/readme",
+                        headers=gh_headers,
+                    )
+                    has_readme = rm.status_code == 200
+                except Exception:
+                    has_readme = False
+
+            repo_summaries.append({
+                "name": r.get("name"),
+                "description": r.get("description") or "NO DESCRIPTION",
+                "language": r.get("language") or "Unknown",
+                "stars": stars,
+                "forks": forks,
+                "has_readme": has_readme,
+                "has_description": has_desc,
+                "has_topics": has_topics,
+                "topics": r.get("topics", []),
+                "updated_at": r.get("updated_at", "")[:10],
+                "is_fork": r.get("fork", False),
+            })
+
+    total_repos = len(repos)
+    repos_with_desc = sum(1 for r in repo_summaries if r["has_description"])
+    repos_with_readme = sum(1 for r in repo_summaries if r["has_readme"])
+    original_repos = sum(1 for r in repo_summaries if not r["is_fork"])
+    total_stars = sum(r["stars"] for r in repo_summaries)
+    languages_used = list(set(r["language"] for r in repo_summaries if r["language"] != "Unknown"))
 
     profile_summary = {
         "username": username,
-        "name": user_data.get("name") or username,
-        "bio": user_data.get("bio") or "",
+        "name": user_data.get("name") or "",
+        "bio": user_data.get("bio") or "NO BIO SET",
         "public_repos": user_data.get("public_repos", 0),
         "followers": user_data.get("followers", 0),
         "following": user_data.get("following", 0),
         "location": user_data.get("location") or "",
-        "blog": user_data.get("blog") or "",
+        "blog_or_portfolio": user_data.get("blog") or "NONE",
+        "profile_picture_set": bool(user_data.get("avatar_url") and "gravatar" not in user_data.get("avatar_url", "")),
+        "stats": {
+            "total_repos": total_repos,
+            "original_repos": original_repos,
+            "forked_repos": total_repos - original_repos,
+            "repos_with_description": repos_with_desc,
+            "repos_checked_for_readme": min(5, len(repo_summaries)),
+            "repos_with_readme_of_checked": repos_with_readme,
+            "total_stars": total_stars,
+            "languages_used": languages_used,
+        },
         "repos": repo_summaries,
     }
 
     prompt = f"""
-You are an expert technical recruiter reviewing a student's GitHub profile to help them get hired.
-{"Target role: " + target_role if target_role else ""}
+You are a strict but fair technical recruiter reviewing a student's GitHub profile.
+{"Target role: " + target_role if target_role else "General software developer role."}
 
-GITHUB PROFILE DATA:
+REAL PROFILE DATA (fetched live from GitHub API):
 {json.dumps(profile_summary, indent=2)}
 
-Analyze this profile thoroughly and return ONLY a valid JSON object (no markdown) with this structure:
+Score this profile HONESTLY based on these exact criteria. Do NOT default to average scores — use the real data above.
+
+SCORING RUBRIC (total 100 points):
+- Bio / profile completeness (name, bio, location, portfolio link): 0-15 pts
+  * No bio = 0, vague bio = 5, good bio = 10, excellent recruiter-ready bio = 15
+- Number of original (non-fork) repos: 0-15 pts
+  * 0-2 repos = 3, 3-5 = 8, 6-10 = 12, 11+ = 15
+- Repo quality (descriptions, topics, meaningful names): 0-20 pts
+  * All repos named "repo1/test/untitled" with no descriptions = 0-5
+  * Some descriptions and meaningful names = 6-12
+  * Most repos have descriptions and topics = 13-20
+- README quality (based on has_readme field in data): 0-20 pts
+  * 0 READMEs = 0, 1-2 = 8, 3-4 = 14, 5 = 20
+- Project diversity and tech stack breadth: 0-15 pts
+  * Only 1 language = 3, 2-3 languages = 8, 4+ languages or full-stack projects = 15
+- Stars and community engagement: 0-15 pts
+  * 0 stars = 2, 1-5 stars = 6, 6-20 stars = 11, 20+ stars = 15
+
+GRADE:
+- A = 85-100, B = 70-84, C = 50-69, D = below 50
+
+Calculate the score strictly from the rubric above using the actual numbers in the data.
+A profile with no bio, no descriptions, all forks, no READMEs MUST score below 30.
+A profile with good bio, 10+ original repos with descriptions and READMEs MUST score above 80.
+
+Return ONLY a valid JSON object (no markdown):
 {{
-  "overall_score": <integer 0-100>,
-  "grade": "<A | B | C | D>",
-  "summary": "<2-3 sentence honest summary of the profile's strength for job hunting>",
+  "overall_score": <integer 0-100 based strictly on rubric>,
+  "grade": "<A|B|C|D>",
+  "score_breakdown": {{
+    "bio_completeness": <0-15>,
+    "repo_count": <0-15>,
+    "repo_quality": <0-20>,
+    "readme_quality": <0-20>,
+    "tech_diversity": <0-15>,
+    "community_engagement": <0-15>
+  }},
+  "summary": "<2-3 sentences referencing actual numbers from the profile>",
   "profile_strengths": [
-    {{"title": "<strength>", "detail": "<specific observation>"}}
+    {{"title": "<strength>", "detail": "<cite specific repo names or actual data>"}}
   ],
   "profile_weaknesses": [
-    {{"title": "<weakness>", "detail": "<specific issue and its impact on recruiter impression>"}}
+    {{"title": "<weakness>", "detail": "<cite specific missing things from actual data>"}}
   ],
   "top_repos": [
     {{
-      "name": "<repo name>",
-      "why": "<why this repo stands out or doesn't>",
-      "improvement": "<specific thing to improve about this repo>"
+      "name": "<actual repo name from data>",
+      "why": "<specific observation about this repo>",
+      "improvement": "<concrete fix>"
     }}
   ],
-  "readme_quality": "<Poor | Basic | Good | Excellent>",
+  "readme_quality": "<Poor|Basic|Good|Excellent>",
   "readme_tips": ["<tip1>", "<tip2>"],
-  "missing_for_role": ["<thing1 missing for target role>", "<thing2>"],
+  "missing_for_role": ["<specific gap for the target role>"],
   "action_items": [
     {{
-      "priority": "<High | Medium | Low>",
-      "action": "<specific action to take>",
-      "impact": "<why this matters to recruiters>"
+      "priority": "<High|Medium|Low>",
+      "action": "<specific actionable step>",
+      "impact": "<why recruiters care>"
     }}
   ],
-  "bio_suggestion": "<rewritten bio that would attract recruiters>",
-  "pinned_repos_suggestion": "<which repos they should pin and why>"
+  "bio_suggestion": "<rewritten bio based on their actual repos and languages>",
+  "pinned_repos_suggestion": "<name actual repos from the data that should be pinned>"
 }}
 """
 

@@ -125,6 +125,41 @@ export default function GitHubPanel() {
         </div>
       </div>
 
+      {/* Score Breakdown */}
+      {result.score_breakdown && (
+        <div className="card p-5">
+          <p className="section-title mb-3">Score Breakdown</p>
+          <div className="space-y-2.5">
+            {[
+              { key: 'bio_completeness', label: 'Bio & Profile', max: 15 },
+              { key: 'repo_count', label: 'Repo Count', max: 15 },
+              { key: 'repo_quality', label: 'Repo Quality', max: 20 },
+              { key: 'readme_quality', label: 'README Quality', max: 20 },
+              { key: 'tech_diversity', label: 'Tech Diversity', max: 15 },
+              { key: 'community_engagement', label: 'Stars & Engagement', max: 15 },
+            ].map(({ key, label, max }) => {
+              const val = result.score_breakdown[key] ?? 0
+              const pct = Math.round((val / max) * 100)
+              const barColor = pct >= 70 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626'
+              return (
+                <div key={key}>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-xs text-ink-muted">{label}</span>
+                    <span className="text-xs font-semibold text-ink">{val}/{max}</span>
+                  </div>
+                  <div className="h-1.5 bg-slate-light rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${pct}%`, backgroundColor: barColor }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Strengths & Weaknesses */}
       <div className="grid grid-cols-1 gap-4">
         <div className="card p-5">
