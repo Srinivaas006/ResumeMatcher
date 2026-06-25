@@ -1,12 +1,14 @@
 import React, { useState } from 'react'
-import { CheckCircle2, XCircle, TrendingUp, AlertTriangle, Lightbulb, Tag, MessageSquare, RotateCcw } from 'lucide-react'
+import { CheckCircle2, XCircle, TrendingUp, AlertTriangle, Lightbulb, Tag, MessageSquare, RotateCcw, Map } from 'lucide-react'
 import ScoreRing from './ScoreRing'
+import RoadmapPanel from './RoadmapPanel'
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'skills', label: 'Skills' },
+  { key: 'roadmap', label: '🗺 Roadmap' },
   { key: 'improvements', label: 'Resume Fix' },
-  { key: 'interview', label: 'Interview Prep' },
+  { key: 'interview', label: 'Interview' },
 ]
 
 function importanceBadge(imp) {
@@ -21,6 +23,8 @@ function importanceBadge(imp) {
 export default function ResultsPanel({ result, onReset }) {
   const [tab, setTab] = useState('overview')
 
+  const missingSkillNames = (result.missing_skills || []).map(s => s.skill)
+
   return (
     <div className="animate-fade-up space-y-6">
       {/* Header */}
@@ -33,12 +37,12 @@ export default function ResultsPanel({ result, onReset }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 p-1 bg-slate-light rounded-2xl">
+      <div className="flex gap-1 p-1 bg-slate-light rounded-2xl overflow-x-auto">
         {TABS.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-xl transition-all
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-xl transition-all whitespace-nowrap
               ${tab === t.key
                 ? 'bg-white text-ink shadow-sm'
                 : 'text-slate-mid hover:text-ink'
@@ -53,6 +57,13 @@ export default function ResultsPanel({ result, onReset }) {
       <div className="animate-fade-up">
         {tab === 'overview' && <OverviewTab result={result} />}
         {tab === 'skills' && <SkillsTab result={result} />}
+        {tab === 'roadmap' && (
+          missingSkillNames.length > 0
+            ? <RoadmapPanel missingSkills={missingSkillNames} context={result.verdict} />
+            : <div className="card p-6 text-center text-sm text-ink-muted">
+                No missing skills found — nothing to build a roadmap for! 🎉
+              </div>
+        )}
         {tab === 'improvements' && <ImprovementsTab result={result} />}
         {tab === 'interview' && <InterviewTab result={result} />}
       </div>
@@ -73,7 +84,6 @@ export default function ResultsPanel({ result, onReset }) {
 function OverviewTab({ result }) {
   return (
     <div className="space-y-4">
-      {/* Strengths */}
       <div className="card p-5">
         <p className="section-title flex items-center gap-2">
           <TrendingUp size={12} /> Strengths
@@ -91,7 +101,6 @@ function OverviewTab({ result }) {
         </div>
       </div>
 
-      {/* Gaps */}
       <div className="card p-5">
         <p className="section-title flex items-center gap-2">
           <AlertTriangle size={12} /> Gaps
@@ -109,7 +118,6 @@ function OverviewTab({ result }) {
         </div>
       </div>
 
-      {/* ATS Keywords */}
       {result.ats_keywords_missing?.length > 0 && (
         <div className="card p-5">
           <p className="section-title flex items-center gap-2">
