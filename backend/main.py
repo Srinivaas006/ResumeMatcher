@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 import pdfplumber
 import groq
 import httpx
+import asyncio
 import os
 import json
 import re
@@ -209,7 +210,7 @@ async def analyze_github(
     if github_token:
         gh_headers["Authorization"] = f"Bearer {github_token}"
 
-    async with httpx.AsyncClient(timeout=15) as http:
+    async with httpx.AsyncClient(timeout=30) as http:
         try:
             user_resp = await http.get(
                 f"https://api.github.com/users/{username}",
@@ -229,42 +230,45 @@ async def analyze_github(
             repos_resp.raise_for_status()
             repos = repos_resp.json()
 
-        except httpx.RequestError as e:
+        except HTTPException:
+            raise
+        except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to fetch GitHub data: {str(e)}")
 
-    # Fetch README existence for top 5 repos (real check, not assumed)
-    repo_summaries = []
-    async with httpx.AsyncClient(timeout=15) as http2:
-        for r in repos[:10]:
-            has_desc = bool(r.get("description", "").strip())
-            has_topics = len(r.get("topics", [])) > 0
-            stars = r.get("stargazers_count", 0)
-            forks = r.get("forks_count", 0)
-            # Check README existence for top 5 repos only
-            has_readme = False
-            if len(repo_summaries) < 5:
-                try:
-                    rm = await http2.get(
-                        f"https://api.github.com/repos/{username}/{r['name']}/readme",
-                        headers=gh_headers,
-                    )
-                    has_readme = rm.status_code == 200
-                except Exception:
-                    has_readme = False
+        # Check READMEs for top 5 repos in parallel
+        top_repos = [r for r in repos[:10] if not r.get("fork", False)][:5]
+        if len(top_repos) == 0:
+            top_repos = repos[:5]
 
-            repo_summaries.append({
-                "name": r.get("name"),
-                "description": r.get("description") or "NO DESCRIPTION",
-                "language": r.get("language") or "Unknown",
-                "stars": stars,
-                "forks": forks,
-                "has_readme": has_readme,
-                "has_description": has_desc,
-                "has_topics": has_topics,
-                "topics": r.get("topics", []),
-                "updated_at": r.get("updated_at", "")[:10],
-                "is_fork": r.get("fork", False),
-            })
+        async def check_readme(repo_name):
+            try:
+                r = await http.get(
+                    f"https://api.github.com/repos/{username}/{repo_name}/readme",
+                    headers=gh_headers,
+                )
+                return repo_name, r.status_code == 200
+            except Exception:
+                return repo_name, False
+
+        readme_results = await asyncio.gather(*[check_readme(r["name"]) for r in top_repos])
+        readme_map = dict(readme_results)
+
+    # Build repo summaries
+    repo_summaries = []
+    for r in repos[:10]:
+        repo_summaries.append({
+            "name": r.get("name"),
+            "description": r.get("description") or "NO DESCRIPTION",
+            "language": r.get("language") or "Unknown",
+            "stars": r.get("stargazers_count", 0),
+            "forks": r.get("forks_count", 0),
+            "has_readme": readme_map.get(r.get("name"), False),
+            "has_description": bool(r.get("description", "").strip()),
+            "has_topics": len(r.get("topics", [])) > 0,
+            "topics": r.get("topics", []),
+            "updated_at": r.get("updated_at", "")[:10],
+            "is_fork": r.get("fork", False),
+        })
 
     total_repos = len(repos)
     repos_with_desc = sum(1 for r in repo_summaries if r["has_description"])
