@@ -263,7 +263,7 @@ async def analyze_github(
             "stars": r.get("stargazers_count", 0),
             "forks": r.get("forks_count", 0),
             "has_readme": readme_map.get(r.get("name"), False),
-            "has_description": bool(r.get("description", "").strip()),
+            "has_description": bool((r.get("description") or "").strip()),
             "has_topics": len(r.get("topics", [])) > 0,
             "topics": r.get("topics", []),
             "updated_at": r.get("updated_at", "")[:10],
