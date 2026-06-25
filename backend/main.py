@@ -134,38 +134,40 @@ async def learning_roadmap(
     if not skills_list:
         raise HTTPException(status_code=400, detail="Provide at least one missing skill.")
 
+    # Cap skills to avoid overly long roadmaps that exceed token limit
+    skills_capped = skills_list[:6]
+    num_weeks = min(len(skills_capped) + 1, 5)
+
     prompt = f"""
-You are an expert career coach helping a student or fresher learn the skills they need to land a job.
+You are an expert career coach helping a student learn skills to land a job.
+{"Target role: " + context if context else ""}
+Missing skills to cover: {json.dumps(skills_capped)}
 
-{"Their target role context: " + context if context else ""}
+Create a {num_weeks}-week roadmap. Max {num_weeks} week objects. Keep each week concise.
+Each week: max 2 topics, max 2 resources.
 
-They are missing these skills: {json.dumps(skills_list)}
-
-Create a practical, week-by-week learning roadmap for ALL of these skills combined.
-Prioritize the most critical skills first. Be specific — name actual free resources.
-
-Return ONLY a valid JSON object (no markdown) with this structure:
+Return ONLY a valid JSON object. No markdown, no explanation, no trailing text. Must be complete valid JSON.
 {{
-  "total_weeks": <integer>,
-  "goal_summary": "<1 sentence describing what they will achieve>",
+  "total_weeks": {num_weeks},
+  "goal_summary": "<1 sentence>",
   "weeks": [
     {{
-      "week": <integer>,
-      "focus": "<skill or theme for this week>",
-      "daily_hours": <integer 1-3>,
+      "week": 1,
+      "focus": "<skill>",
+      "daily_hours": 2,
       "topics": ["<topic1>", "<topic2>"],
       "resources": [
         {{
-          "title": "<resource name>",
-          "type": "<YouTube | Docs | Course | Article | Practice>",
-          "url": "<actual url>",
-          "description": "<1 sentence on what it covers>"
+          "title": "<name>",
+          "type": "<YouTube|Docs|Course|Article|Practice>",
+          "url": "<url>",
+          "description": "<1 sentence>"
         }}
       ],
-      "milestone": "<what they should be able to do by end of week>"
+      "milestone": "<what they can do after this week>"
     }}
   ],
-  "tips": ["<practical tip1>", "<practical tip2>", "<practical tip3>"]
+  "tips": ["<tip1>", "<tip2>", "<tip3>"]
 }}
 """
 
@@ -173,14 +175,18 @@ Return ONLY a valid JSON object (no markdown) with this structure:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=3000,
+            temperature=0.2,
+            max_tokens=4000,
         )
         raw = response.choices[0].message.content
         cleaned = clean_json_response(raw)
+        # Try to extract JSON if there's extra text around it
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
         result = json.loads(cleaned)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="AI returned malformed response. Please try again.")
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"AI returned malformed JSON. Please try again. ({str(e)})")
     except groq.APIError as e:
         raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
 
