@@ -276,24 +276,89 @@ async def analyze_github(
     original_repos = sum(1 for r in repo_summaries if not r["is_fork"])
     total_stars = sum(r["stars"] for r in repo_summaries)
     languages_used = list(set(r["language"] for r in repo_summaries if r["language"] != "Unknown"))
+    has_bio = bool((user_data.get("bio") or "").strip())
+    has_name = bool((user_data.get("name") or "").strip())
+    has_location = bool((user_data.get("location") or "").strip())
+    has_blog = bool((user_data.get("blog") or "").strip())
 
-    profile_summary = {
+    # ── Calculate score entirely in Python (not AI) ──
+    # Bio completeness (0-15)
+    bio_score = 0
+    if has_bio: bio_score += 8
+    if has_name: bio_score += 3
+    if has_location: bio_score += 2
+    if has_blog: bio_score += 2
+    bio_score = min(bio_score, 15)
+
+    # Repo count — original only (0-15)
+    if original_repos == 0:   repo_count_score = 0
+    elif original_repos <= 2: repo_count_score = 4
+    elif original_repos <= 5: repo_count_score = 8
+    elif original_repos <= 10: repo_count_score = 12
+    else:                      repo_count_score = 15
+
+    # Repo quality — descriptions + topics (0-20)
+    desc_ratio = repos_with_desc / max(len(repo_summaries), 1)
+    topics_count = sum(1 for r in repo_summaries if r["has_topics"])
+    repo_quality_score = round(desc_ratio * 12) + min(topics_count * 2, 8)
+    repo_quality_score = min(repo_quality_score, 20)
+
+    # README quality (0-20) — based on checked repos
+    checked = min(5, len(repo_summaries))
+    if checked == 0:          readme_score = 0
+    elif repos_with_readme == 0: readme_score = 0
+    elif repos_with_readme == 1: readme_score = 8
+    elif repos_with_readme == 2: readme_score = 12
+    elif repos_with_readme == 3: readme_score = 15
+    elif repos_with_readme == 4: readme_score = 18
+    else:                        readme_score = 20
+
+    # Tech diversity (0-15)
+    num_langs = len(languages_used)
+    if num_langs == 0:   tech_score = 0
+    elif num_langs == 1: tech_score = 4
+    elif num_langs == 2: tech_score = 8
+    elif num_langs == 3: tech_score = 11
+    else:                tech_score = 15
+
+    # Stars / engagement (0-15)
+    if total_stars == 0:    stars_score = 2
+    elif total_stars <= 5:  stars_score = 6
+    elif total_stars <= 20: stars_score = 11
+    else:                   stars_score = 15
+
+    score_breakdown = {
+        "bio_completeness": bio_score,
+        "repo_count": repo_count_score,
+        "repo_quality": repo_quality_score,
+        "readme_quality": readme_score,
+        "tech_diversity": tech_score,
+        "community_engagement": stars_score,
+    }
+    overall_score = sum(score_breakdown.values())
+    if overall_score >= 85:   grade = "A"
+    elif overall_score >= 70: grade = "B"
+    elif overall_score >= 50: grade = "C"
+    else:                     grade = "D"
+
+    readme_quality_label = (
+        "Excellent" if readme_score >= 18 else
+        "Good" if readme_score >= 14 else
+        "Basic" if readme_score >= 8 else
+        "Poor"
+    )
+
+    profile_data = {
         "username": username,
         "name": user_data.get("name") or "",
         "bio": user_data.get("bio") or "NO BIO SET",
         "public_repos": user_data.get("public_repos", 0),
         "followers": user_data.get("followers", 0),
-        "following": user_data.get("following", 0),
-        "location": user_data.get("location") or "",
         "blog_or_portfolio": user_data.get("blog") or "NONE",
-        "profile_picture_set": bool(user_data.get("avatar_url") and "gravatar" not in user_data.get("avatar_url", "")),
         "stats": {
-            "total_repos": total_repos,
             "original_repos": original_repos,
-            "forked_repos": total_repos - original_repos,
             "repos_with_description": repos_with_desc,
-            "repos_checked_for_readme": min(5, len(repo_summaries)),
-            "repos_with_readme_of_checked": repos_with_readme,
+            "repos_with_readme": repos_with_readme,
             "total_stars": total_stars,
             "languages_used": languages_used,
         },
@@ -301,75 +366,55 @@ async def analyze_github(
     }
 
     prompt = f"""
-You are a strict but fair technical recruiter reviewing a student's GitHub profile.
+You are a technical recruiter giving feedback on a student's GitHub profile.
 {"Target role: " + target_role if target_role else "General software developer role."}
 
-REAL PROFILE DATA (fetched live from GitHub API):
-{json.dumps(profile_summary, indent=2)}
+PROFILE DATA:
+{json.dumps(profile_data, indent=2)}
 
-Score this profile HONESTLY based on these exact criteria. Do NOT default to average scores — use the real data above.
+SCORES (already calculated — do NOT change these numbers):
+- Overall: {overall_score}/100  Grade: {grade}
+- Bio completeness: {bio_score}/15
+- Repo count: {repo_count_score}/15
+- Repo quality: {repo_quality_score}/20
+- README quality: {readme_score}/20
+- Tech diversity: {tech_score}/15
+- Community engagement: {stars_score}/15
 
-SCORING RUBRIC (total 100 points):
-- Bio / profile completeness (name, bio, location, portfolio link): 0-15 pts
-  * No bio = 0, vague bio = 5, good bio = 10, excellent recruiter-ready bio = 15
-- Number of original (non-fork) repos: 0-15 pts
-  * 0-2 repos = 3, 3-5 = 8, 6-10 = 12, 11+ = 15
-- Repo quality (descriptions, topics, meaningful names): 0-20 pts
-  * All repos named "repo1/test/untitled" with no descriptions = 0-5
-  * Some descriptions and meaningful names = 6-12
-  * Most repos have descriptions and topics = 13-20
-- README quality (based on has_readme field in data): 0-20 pts
-  * 0 READMEs = 0, 1-2 = 8, 3-4 = 14, 5 = 20
-- Project diversity and tech stack breadth: 0-15 pts
-  * Only 1 language = 3, 2-3 languages = 8, 4+ languages or full-stack projects = 15
-- Stars and community engagement: 0-15 pts
-  * 0 stars = 2, 1-5 stars = 6, 6-20 stars = 11, 20+ stars = 15
-
-GRADE:
-- A = 85-100, B = 70-84, C = 50-69, D = below 50
-
-Calculate the score strictly from the rubric above using the actual numbers in the data.
-A profile with no bio, no descriptions, all forks, no READMEs MUST score below 30.
-A profile with good bio, 10+ original repos with descriptions and READMEs MUST score above 80.
+Your job is ONLY to write the text feedback based on these scores and the profile data above.
+Reference actual repo names and real numbers in your feedback.
 
 Return ONLY a valid JSON object (no markdown):
 {{
-  "overall_score": <integer 0-100 based strictly on rubric>,
-  "grade": "<A|B|C|D>",
-  "score_breakdown": {{
-    "bio_completeness": <0-15>,
-    "repo_count": <0-15>,
-    "repo_quality": <0-20>,
-    "readme_quality": <0-20>,
-    "tech_diversity": <0-15>,
-    "community_engagement": <0-15>
-  }},
-  "summary": "<2-3 sentences referencing actual numbers from the profile>",
+  "overall_score": {overall_score},
+  "grade": "{grade}",
+  "score_breakdown": {json.dumps(score_breakdown)},
+  "summary": "<2-3 sentences referencing actual repo names and stats>",
   "profile_strengths": [
-    {{"title": "<strength>", "detail": "<cite specific repo names or actual data>"}}
+    {{"title": "<strength>", "detail": "<cite specific repo names or actual numbers>"}}
   ],
   "profile_weaknesses": [
-    {{"title": "<weakness>", "detail": "<cite specific missing things from actual data>"}}
+    {{"title": "<weakness>", "detail": "<specific missing thing and its impact>"}}
   ],
   "top_repos": [
     {{
-      "name": "<actual repo name from data>",
-      "why": "<specific observation about this repo>",
-      "improvement": "<concrete fix>"
+      "name": "<actual repo name from the data>",
+      "why": "<specific observation>",
+      "improvement": "<one concrete fix>"
     }}
   ],
-  "readme_quality": "<Poor|Basic|Good|Excellent>",
+  "readme_quality": "{readme_quality_label}",
   "readme_tips": ["<tip1>", "<tip2>"],
-  "missing_for_role": ["<specific gap for the target role>"],
+  "missing_for_role": ["<gap1 for target role>", "<gap2>"],
   "action_items": [
     {{
       "priority": "<High|Medium|Low>",
-      "action": "<specific actionable step>",
+      "action": "<specific action>",
       "impact": "<why recruiters care>"
     }}
   ],
-  "bio_suggestion": "<rewritten bio based on their actual repos and languages>",
-  "pinned_repos_suggestion": "<name actual repos from the data that should be pinned>"
+  "bio_suggestion": "<rewritten bio using their actual languages and projects>",
+  "pinned_repos_suggestion": "<name actual repos from data that should be pinned and why>"
 }}
 """
 
@@ -382,9 +427,17 @@ Return ONLY a valid JSON object (no markdown):
         )
         raw = response.choices[0].message.content
         cleaned = clean_json_response(raw)
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
         result = json.loads(cleaned)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="AI returned malformed response. Please try again.")
+        # Always enforce Python-calculated scores regardless of what AI returns
+        result["overall_score"] = overall_score
+        result["grade"] = grade
+        result["score_breakdown"] = score_breakdown
+        result["readme_quality"] = readme_quality_label
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"AI returned malformed JSON: {str(e)}")
     except groq.APIError as e:
         raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
 
