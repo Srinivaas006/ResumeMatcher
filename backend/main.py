@@ -2,7 +2,6 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pdfplumber
-import google.generativeai as genai
 import httpx
 import asyncio
 import os
@@ -20,14 +19,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-gemini = genai.GenerativeModel(
-    "gemini-1.5-flash",
-    generation_config=genai.GenerationConfig(
-        temperature=0.3,
-        max_output_tokens=4096,
-    )
-)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+
+async def call_gemini(prompt: str) -> str:
+    """Call Gemini API via plain HTTP — no SDK needed, works on any Python version."""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 4096},
+    }
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.post(
+            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
@@ -73,7 +83,7 @@ async def analyze(
         raise HTTPException(status_code=422, detail="Could not extract text from the resume.")
 
     prompt = f"""
-You are an expert technical recruiter and career coach. Analyze the resume against the job description and return a detailed, honest assessment.
+You are an expert technical recruiter. Analyze the resume against the job description.
 
 RESUME:
 {resume_text}
@@ -81,9 +91,8 @@ RESUME:
 JOB DESCRIPTION:
 {job_description}
 
-Return ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
+Return ONLY a valid JSON object (no markdown) with this exact structure:
 {{
-  "overall_score": <integer 0-100>,
   "verdict": "<one of: Strong Match | Good Match | Partial Match | Weak Match>",
   "summary": "<2-3 sentence honest executive summary of fit>",
   "matched_skills": [
@@ -99,18 +108,17 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
     {{"title": "<gap title>", "detail": "<specific gap and its impact on fit>"}}
   ],
   "resume_improvements": [
-    {{"section": "<section name e.g. Experience, Skills>", "current": "<what it says now or what's missing>", "suggestion": "<exact improvement to make>"}}
+    {{"section": "<section name>", "current": "<what it says now>", "suggestion": "<exact improvement>"}}
   ],
   "ats_keywords_missing": ["<keyword1>", "<keyword2>"],
   "interview_prep": [
-    {{"question": "<likely interview question based on gaps>", "tip": "<how to answer it>"}}
+    {{"question": "<likely interview question>", "tip": "<how to answer it>"}}
   ]
 }}
 """
 
     try:
-        response = gemini.generate_content(prompt)
-        raw = response.text
+        raw = await call_gemini(prompt)
         cleaned = clean_json_response(raw)
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
@@ -120,6 +128,41 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
         raise HTTPException(status_code=502, detail=f"AI returned malformed JSON. Please try again. ({str(e)})")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
+
+    # ── Calculate score in Python, not AI ──
+    matched = len(result.get("matched_skills", []))
+    missing = result.get("missing_skills", [])
+    total_skills = matched + len(missing)
+
+    # Base score from skill match ratio
+    if total_skills == 0:
+        skill_ratio = 0.5
+    else:
+        skill_ratio = matched / total_skills
+
+    base = round(skill_ratio * 70)  # max 70 from skills
+
+    # Bonus points
+    critical_missing = sum(1 for s in missing if s.get("importance") == "Critical")
+    high_missing = sum(1 for s in missing if s.get("importance") == "High")
+
+    bonus = 0
+    if critical_missing == 0: bonus += 15   # no critical gaps
+    elif critical_missing == 1: bonus += 8
+    if high_missing == 0: bonus += 10
+    elif high_missing <= 2: bonus += 5
+    if matched >= 8: bonus += 5             # strong skill breadth
+
+    overall_score = min(base + bonus, 100)
+
+    # Verdict based on score
+    if overall_score >= 80:   verdict = "Strong Match"
+    elif overall_score >= 65: verdict = "Good Match"
+    elif overall_score >= 45: verdict = "Partial Match"
+    else:                     verdict = "Weak Match"
+
+    result["overall_score"] = overall_score
+    result["verdict"] = verdict
 
     return JSONResponse(content=result)
 
@@ -178,8 +221,7 @@ Return ONLY a valid JSON object. No markdown, no explanation, no trailing text. 
 """
 
     try:
-        response = gemini.generate_content(prompt)
-        raw = response.text
+        raw = await call_gemini(prompt)
         cleaned = clean_json_response(raw)
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
@@ -271,7 +313,6 @@ async def analyze_github(
 
     total_repos = len(repos)
     repos_with_desc = sum(1 for r in repo_summaries if r["has_description"])
-    repos_with_readme = sum(1 for r in repo_summaries if r["has_readme"])
     original_repos = sum(1 for r in repo_summaries if not r["is_fork"])
     total_stars = sum(r["stars"] for r in repo_summaries)
     languages_used = list(set(r["language"] for r in repo_summaries if r["language"] != "Unknown"))
@@ -302,15 +343,16 @@ async def analyze_github(
     repo_quality_score = round(desc_ratio * 12) + min(topics_count * 2, 8)
     repo_quality_score = min(repo_quality_score, 20)
 
-    # README quality (0-20) — based on checked repos
-    checked = min(5, len(repo_summaries))
-    if checked == 0:          readme_score = 0
-    elif repos_with_readme == 0: readme_score = 0
-    elif repos_with_readme == 1: readme_score = 8
-    elif repos_with_readme == 2: readme_score = 12
-    elif repos_with_readme == 3: readme_score = 15
-    elif repos_with_readme == 4: readme_score = 18
-    else:                        readme_score = 20
+    # README quality (0-20) — only score against repos actually checked (top 5)
+    checked_repos = [r for r in repo_summaries if r["name"] in readme_map]
+    num_checked = len(checked_repos)
+    repos_with_readme = sum(1 for r in checked_repos if r["has_readme"])
+
+    if num_checked == 0:
+        readme_score = 0
+    else:
+        readme_ratio = repos_with_readme / num_checked
+        readme_score = round(readme_ratio * 20)
 
     # Tech diversity (0-15)
     num_langs = len(languages_used)
@@ -418,8 +460,7 @@ Return ONLY a valid JSON object (no markdown):
 """
 
     try:
-        response = gemini.generate_content(prompt)
-        raw = response.text
+        raw = await call_gemini(prompt)
         cleaned = clean_json_response(raw)
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
