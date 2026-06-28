@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pdfplumber
-import groq
+import google.generativeai as genai
 import httpx
 import asyncio
 import os
@@ -20,7 +20,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+gemini = genai.GenerativeModel(
+    "gemini-1.5-flash",
+    generation_config=genai.GenerationConfig(
+        temperature=0.3,
+        max_output_tokens=4096,
+    )
+)
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
@@ -102,19 +109,17 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
 """
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2048,
-        )
-        raw = response.choices[0].message.content
+        response = gemini.generate_content(prompt)
+        raw = response.text
         cleaned = clean_json_response(raw)
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
         result = json.loads(cleaned)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="AI returned malformed response. Please try again.")
-    except groq.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"AI returned malformed JSON. Please try again. ({str(e)})")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
 
     return JSONResponse(content=result)
 
@@ -173,23 +178,17 @@ Return ONLY a valid JSON object. No markdown, no explanation, no trailing text. 
 """
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=4000,
-        )
-        raw = response.choices[0].message.content
+        response = gemini.generate_content(prompt)
+        raw = response.text
         cleaned = clean_json_response(raw)
-        # Try to extract JSON if there's extra text around it
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
             cleaned = json_match.group(0)
         result = json.loads(cleaned)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=502, detail=f"AI returned malformed JSON. Please try again. ({str(e)})")
-    except groq.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
 
     return JSONResponse(content=result)
 
@@ -419,13 +418,8 @@ Return ONLY a valid JSON object (no markdown):
 """
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2500,
-        )
-        raw = response.choices[0].message.content
+        response = gemini.generate_content(prompt)
+        raw = response.text
         cleaned = clean_json_response(raw)
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
@@ -438,7 +432,7 @@ Return ONLY a valid JSON object (no markdown):
         result["readme_quality"] = readme_quality_label
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=502, detail=f"AI returned malformed JSON: {str(e)}")
-    except groq.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
 
     return JSONResponse(content=result)
