@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
 
 async def call_gemini(prompt: str) -> str:
@@ -82,8 +82,86 @@ async def analyze(
     if not resume_text.strip():
         raise HTTPException(status_code=422, detail="Could not extract text from the resume.")
 
-    prompt = f"""
-You are an expert technical recruiter. Analyze the resume against the job description.
+    # ── Step 1: Extract ALL skills from JD deterministically ──
+    skills_prompt = f"""
+Extract every technical skill, tool, language, framework, and qualification required in this job description.
+List ONLY skills — no descriptions, no sentences.
+Return ONLY a JSON array of strings. Example: ["Python", "React", "Docker"]
+
+JOB DESCRIPTION:
+{job_description}
+"""
+    try:
+        skills_raw = await call_gemini(skills_prompt)
+        skills_clean = clean_json_response(skills_raw)
+        arr_match = re.search(r'\[.*\]', skills_clean, re.DOTALL)
+        jd_skills = json.loads(arr_match.group(0)) if arr_match else []
+    except Exception:
+        jd_skills = []
+
+    # ── Step 2: Classify each JD skill against the resume ──
+    classify_prompt = f"""
+You are a resume screener. For each skill below, check if it appears in the resume (directly or equivalent).
+
+RESUME:
+{resume_text}
+
+SKILLS TO CHECK (from job description):
+{json.dumps(jd_skills)}
+
+Return ONLY a valid JSON object:
+{{
+  "matched": [
+    {{"skill": "<skill>", "context": "<exact phrase from resume showing this skill>"}}
+  ],
+  "missing": [
+    {{"skill": "<skill>", "importance": "<Critical|High|Medium>", "suggestion": "<one sentence on how to get it>"}}
+  ]
+}}
+Rules:
+- A skill is matched only if there is clear evidence in the resume text
+- Do not infer — if it's not there, mark as missing
+- importance: Critical = required/must-have, High = strongly preferred, Medium = nice-to-have
+"""
+    try:
+        classify_raw = await call_gemini(classify_prompt)
+        classify_clean = clean_json_response(classify_raw)
+        obj_match = re.search(r'\{.*\}', classify_clean, re.DOTALL)
+        classify_result = json.loads(obj_match.group(0)) if obj_match else {"matched": [], "missing": []}
+    except Exception:
+        classify_result = {"matched": [], "missing": []}
+
+    matched_skills = classify_result.get("matched", [])
+    missing_skills = classify_result.get("missing", [])
+
+    # ── Step 3: Score in Python from fixed skill list ──
+    matched_count = len(matched_skills)
+    missing_count = len(missing_skills)
+    total = matched_count + missing_count
+
+    skill_ratio = matched_count / total if total > 0 else 0.5
+    base = round(skill_ratio * 70)
+
+    critical_missing = sum(1 for s in missing_skills if s.get("importance") == "Critical")
+    high_missing = sum(1 for s in missing_skills if s.get("importance") == "High")
+
+    bonus = 0
+    if critical_missing == 0: bonus += 15
+    elif critical_missing == 1: bonus += 8
+    if high_missing == 0: bonus += 10
+    elif high_missing <= 2: bonus += 5
+    if matched_count >= 8: bonus += 5
+
+    overall_score = min(base + bonus, 100)
+
+    if overall_score >= 80:   verdict = "Strong Match"
+    elif overall_score >= 65: verdict = "Good Match"
+    elif overall_score >= 45: verdict = "Partial Match"
+    else:                     verdict = "Weak Match"
+
+    # ── Step 4: Get narrative feedback ──
+    feedback_prompt = f"""
+You are a career coach. Based on this resume vs job description analysis, provide feedback.
 
 RESUME:
 {resume_text}
@@ -91,78 +169,48 @@ RESUME:
 JOB DESCRIPTION:
 {job_description}
 
-Return ONLY a valid JSON object (no markdown) with this exact structure:
+MATCHED SKILLS: {json.dumps([s["skill"] for s in matched_skills])}
+MISSING SKILLS: {json.dumps([s["skill"] for s in missing_skills])}
+SCORE: {overall_score}/100
+
+Return ONLY a valid JSON object (no markdown):
 {{
-  "verdict": "<one of: Strong Match | Good Match | Partial Match | Weak Match>",
-  "summary": "<2-3 sentence honest executive summary of fit>",
-  "matched_skills": [
-    {{"skill": "<skill name>", "context": "<where it appears in resume>"}}
-  ],
-  "missing_skills": [
-    {{"skill": "<skill name>", "importance": "<Critical | High | Medium>", "suggestion": "<how to acquire or demonstrate this>"}}
-  ],
+  "summary": "<2-3 sentence honest summary citing specific matched/missing skills>",
   "strengths": [
-    {{"title": "<strength title>", "detail": "<specific detail from resume>"}}
+    {{"title": "<strength>", "detail": "<specific evidence from resume>"}}
   ],
   "gaps": [
-    {{"title": "<gap title>", "detail": "<specific gap and its impact on fit>"}}
+    {{"title": "<gap>", "detail": "<impact on fit>"}}
   ],
   "resume_improvements": [
-    {{"section": "<section name>", "current": "<what it says now>", "suggestion": "<exact improvement>"}}
+    {{"section": "<section>", "current": "<current text>", "suggestion": "<improvement>"}}
   ],
-  "ats_keywords_missing": ["<keyword1>", "<keyword2>"],
+  "ats_keywords_missing": ["<keyword>"],
   "interview_prep": [
-    {{"question": "<likely interview question>", "tip": "<how to answer it>"}}
+    {{"question": "<question>", "tip": "<how to answer>"}}
   ]
 }}
 """
-
     try:
-        raw = await call_gemini(prompt)
-        cleaned = clean_json_response(raw)
-        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-        if json_match:
-            cleaned = json_match.group(0)
-        result = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=502, detail=f"AI returned malformed JSON. Please try again. ({str(e)})")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
+        fb_raw = await call_gemini(feedback_prompt)
+        fb_clean = clean_json_response(fb_raw)
+        fb_match = re.search(r'\{.*\}', fb_clean, re.DOTALL)
+        feedback = json.loads(fb_match.group(0)) if fb_match else {}
+    except Exception:
+        feedback = {}
 
-    # ── Calculate score in Python, not AI ──
-    matched = len(result.get("matched_skills", []))
-    missing = result.get("missing_skills", [])
-    total_skills = matched + len(missing)
-
-    # Base score from skill match ratio
-    if total_skills == 0:
-        skill_ratio = 0.5
-    else:
-        skill_ratio = matched / total_skills
-
-    base = round(skill_ratio * 70)  # max 70 from skills
-
-    # Bonus points
-    critical_missing = sum(1 for s in missing if s.get("importance") == "Critical")
-    high_missing = sum(1 for s in missing if s.get("importance") == "High")
-
-    bonus = 0
-    if critical_missing == 0: bonus += 15   # no critical gaps
-    elif critical_missing == 1: bonus += 8
-    if high_missing == 0: bonus += 10
-    elif high_missing <= 2: bonus += 5
-    if matched >= 8: bonus += 5             # strong skill breadth
-
-    overall_score = min(base + bonus, 100)
-
-    # Verdict based on score
-    if overall_score >= 80:   verdict = "Strong Match"
-    elif overall_score >= 65: verdict = "Good Match"
-    elif overall_score >= 45: verdict = "Partial Match"
-    else:                     verdict = "Weak Match"
-
-    result["overall_score"] = overall_score
-    result["verdict"] = verdict
+    result = {
+        "overall_score": overall_score,
+        "verdict": verdict,
+        "summary": feedback.get("summary", f"Matched {matched_count} of {total} required skills."),
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
+        "strengths": feedback.get("strengths", []),
+        "gaps": feedback.get("gaps", []),
+        "resume_improvements": feedback.get("resume_improvements", []),
+        "ats_keywords_missing": feedback.get("ats_keywords_missing", []),
+        "interview_prep": feedback.get("interview_prep", []),
+    }
 
     return JSONResponse(content=result)
 
