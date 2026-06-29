@@ -1,303 +1,258 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Download, Loader2, MousePointer, Check, X, Info } from 'lucide-react'
-import * as pdfjsLib from 'pdfjs-dist'
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 
-// Point worker to the installed package's worker file
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString()
+const PDFJS_VERSION = '3.4.120'
+const PDFJS_CDN = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}`
+
+function loadScript(src, id) {
+  return new Promise((resolve, reject) => {
+    if (document.getElementById(id)) { resolve(); return }
+    const s = document.createElement('script')
+    s.id = id
+    s.src = src
+    s.onload = resolve
+    s.onerror = () => reject(new Error(`Failed to load ${src}`))
+    document.head.appendChild(s)
+  })
+}
+
+async function getPdfJs() {
+  if (window.__pdfjs_ready) return window.pdfjsLib
+  await loadScript(`${PDFJS_CDN}/pdf.min.js`, 'pdfjs-lib')
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/pdf.worker.min.js`
+  window.__pdfjs_ready = true
+  return window.pdfjsLib
+}
 
 export default function PDFEditor({ pdfFile }) {
   const canvasRef = useRef(null)
-  const [loading, setLoading] = useState(true)
+  const inputRef = useRef(null)
+  const [status, setStatus] = useState('loading') // loading | ready | error
+  const [errorMsg, setErrorMsg] = useState('')
   const [pdfBytes, setPdfBytes] = useState(null)
   const [textItems, setTextItems] = useState([])
-  const [viewport, setViewport] = useState(null)
+  const [canvasW, setCanvasW] = useState(0)
+  const [canvasH, setCanvasH] = useState(0)
   const [editing, setEditing] = useState(null)
   const [editValue, setEditValue] = useState('')
   const [edits, setEdits] = useState({})
   const [saving, setSaving] = useState(false)
-  const [scale] = useState(1.5)
-  const inputRef = useRef(null)
-  const [error, setError] = useState(null)
+  const SCALE = 1.5
 
   useEffect(() => {
     if (!pdfFile) return
-    let cancelled = false
+    let dead = false
 
-    async function load() {
-      setLoading(true)
-      setError(null)
+    ;(async () => {
+      setStatus('loading')
+      setEdits({})
       try {
-        const arrayBuffer = await pdfFile.arrayBuffer()
-        setPdfBytes(arrayBuffer.slice(0))
+        const buf = await pdfFile.arrayBuffer()
+        if (dead) return
+        setPdfBytes(buf.slice(0))
 
-        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) })
-        const doc = await loadingTask.promise
-        if (cancelled) return
+        const pdfjs = await getPdfJs()
+        if (dead) return
+
+        const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise
+        if (dead) return
 
         const page = await doc.getPage(1)
-        const vp = page.getViewport({ scale })
-        setViewport(vp)
+        const vp = page.getViewport({ scale: SCALE })
 
         const canvas = canvasRef.current
-        if (!canvas) return
         canvas.width = vp.width
         canvas.height = vp.height
-        const ctx = canvas.getContext('2d')
-        await page.render({ canvasContext: ctx, viewport: vp }).promise
+        setCanvasW(vp.width)
+        setCanvasH(vp.height)
 
-        // Extract text with positions
-        const content = await page.getTextContent()
-        const items = []
-        content.items.forEach((item, idx) => {
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise
+        if (dead) return
+
+        // Extract text positions
+        const { items } = await page.getTextContent()
+        const parsed = []
+        items.forEach((item, i) => {
           if (!item.str?.trim()) return
-          const tx = pdfjsLib.Util.transform(vp.transform, item.transform)
-          const x = tx[4]
-          const y = tx[5]
-          const h = Math.abs(item.transform[3]) * scale
-          const w = item.width * scale
-          items.push({
-            index: idx,
+          const t = pdfjs.Util.transform(vp.transform, item.transform)
+          const x = t[4]
+          const y = t[5]
+          const fh = Math.abs(item.transform[3]) * SCALE
+          const fw = item.width * SCALE
+          parsed.push({
+            idx: i,
             str: item.str,
             x,
-            y: y - h,
-            w: Math.max(w, 20),
-            h: Math.max(h, 10),
-            fontSize: Math.abs(item.transform[3]),
+            y: y - fh,
+            w: Math.max(fw, 16),
+            h: Math.max(fh, 8),
+            fs: Math.abs(item.transform[3]),
           })
         })
-        setTextItems(items)
+        setTextItems(parsed)
+        setStatus('ready')
       } catch (e) {
-        console.error('PDF load error', e)
-        setError('Failed to load PDF: ' + e.message)
-      } finally {
-        if (!cancelled) setLoading(false)
+        if (!dead) { setErrorMsg(e.message); setStatus('error') }
       }
-    }
+    })()
 
-    load()
-    return () => { cancelled = true }
+    return () => { dead = true }
   }, [pdfFile])
 
   useEffect(() => {
-    if (editing !== null && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
+    if (editing !== null) setTimeout(() => inputRef.current?.focus(), 30)
   }, [editing])
 
   function startEdit(item) {
-    setEditing(item.index)
-    setEditValue(edits[item.index] ?? item.str)
+    setEditing(item.idx)
+    setEditValue(edits[item.idx] ?? item.str)
   }
 
-  function commitEdit() {
+  function commit() {
     if (editing === null) return
-    const original = textItems.find(t => t.index === editing)?.str ?? ''
-    if (!editValue.trim() || editValue === original) {
-      const next = { ...edits }
-      delete next[editing]
-      setEdits(next)
+    const orig = textItems.find(t => t.idx === editing)?.str ?? ''
+    if (editValue.trim() && editValue !== orig) {
+      setEdits(p => ({ ...p, [editing]: editValue }))
     } else {
-      setEdits(prev => ({ ...prev, [editing]: editValue }))
+      const n = { ...edits }; delete n[editing]; setEdits(n)
     }
     setEditing(null)
   }
 
-  function cancelEdit() {
-    setEditing(null)
-  }
+  function cancel() { setEditing(null) }
 
-  async function downloadPDF() {
+  async function download() {
     if (!pdfBytes) return
     setSaving(true)
     try {
-      const pdfDoc = await PDFDocument.load(pdfBytes.slice(0))
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
-      const pages = pdfDoc.getPages()
-      const page = pages[0]
-      const { height } = page.getSize()
+      const doc = await PDFDocument.load(pdfBytes.slice(0))
+      const font = await doc.embedFont(StandardFonts.Helvetica)
+      const page = doc.getPages()[0]
+      const { height: ph } = page.getSize()
 
       for (const item of textItems) {
-        const newText = edits[item.index]
-        if (!newText || newText === item.str) continue
-
-        const pdfX = item.x / scale
-        const pdfY = height - ((item.y + item.h) / scale)
-        const pdfW = item.w / scale
-        const pdfH = item.h / scale
-        const fontSize = Math.max(item.fontSize, 6)
-
-        // Cover original
-        page.drawRectangle({
-          x: pdfX - 1,
-          y: pdfY - 1,
-          width: pdfW + 12,
-          height: pdfH + 2,
-          color: rgb(1, 1, 1),
-        })
-
-        // Draw new text
-        page.drawText(newText, {
-          x: pdfX,
-          y: pdfY,
-          size: fontSize,
-          font,
-          color: rgb(0, 0, 0),
-        })
+        const txt = edits[item.idx]
+        if (!txt || txt === item.str) continue
+        const px = item.x / SCALE
+        const py = ph - ((item.y + item.h) / SCALE)
+        const fs = Math.max(item.fs, 6)
+        // white box over original
+        page.drawRectangle({ x: px - 1, y: py - 1, width: item.w / SCALE + 10, height: item.h / SCALE + 2, color: rgb(1, 1, 1) })
+        // new text
+        page.drawText(txt, { x: px, y: py, size: fs, font, color: rgb(0, 0, 0) })
       }
 
-      const edited = await pdfDoc.save()
-      const blob = new Blob([edited], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `edited_${pdfFile.name}`
-      a.click()
+      const bytes = await doc.save()
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const a = Object.assign(document.createElement('a'), { href: url, download: `edited_${pdfFile.name}` })
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
       URL.revokeObjectURL(url)
-    } catch (e) {
-      console.error('Save error', e)
-      alert('Failed to save: ' + e.message)
-    } finally {
-      setSaving(false)
-    }
+    } catch (e) { alert('Save failed: ' + e.message) }
+    finally { setSaving(false) }
   }
 
   const editCount = Object.keys(edits).length
 
-  if (error) {
-    return (
-      <div className="card p-6 text-center space-y-2">
-        <p className="text-sm font-semibold text-signal-red">Failed to load PDF</p>
-        <p className="text-xs text-ink-muted">{error}</p>
-      </div>
-    )
-  }
+  if (status === 'error') return (
+    <div className="card p-8 text-center">
+      <p className="text-sm font-semibold text-signal-red mb-1">Could not load PDF</p>
+      <p className="text-xs text-ink-muted">{errorMsg}</p>
+    </div>
+  )
 
-  if (loading) {
-    return (
-      <div className="card p-10 flex flex-col items-center gap-3">
-        <Loader2 size={24} className="text-accent animate-spin" />
-        <p className="text-sm text-ink-muted">Loading PDF for editing…</p>
-      </div>
-    )
-  }
+  if (status === 'loading') return (
+    <div className="card p-10 flex flex-col items-center gap-3">
+      <Loader2 size={22} className="text-accent animate-spin" />
+      <p className="text-sm text-ink-muted">Rendering PDF…</p>
+    </div>
+  )
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Toolbar */}
-      <div className="card p-4 flex items-center justify-between gap-4">
+      <div className="card p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <MousePointer size={14} className="text-accent" />
-          <p className="text-xs text-ink-muted">Click any text to edit it inline</p>
+          <MousePointer size={13} className="text-accent" />
+          <p className="text-xs text-ink-muted">Click any text to edit · Enter to save · Esc to cancel</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {editCount > 0 && (
-            <span className="text-xs font-semibold text-accent bg-accent-soft px-2 py-1 rounded-lg">
+            <span className="text-xs font-bold text-accent bg-accent-soft px-2.5 py-1 rounded-lg">
               {editCount} edit{editCount !== 1 ? 's' : ''}
             </span>
           )}
-          <button
-            onClick={downloadPDF}
-            disabled={saving || editCount === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-accent text-white text-xs font-semibold
-                       rounded-xl hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+          <button onClick={download} disabled={saving || editCount === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-accent text-white text-xs font-semibold rounded-xl
+                       hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+            {saving ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
             {saving ? 'Saving…' : 'Download PDF'}
           </button>
         </div>
       </div>
 
-      {/* Hint */}
-      <div className="flex items-center gap-2 px-1">
-        <Info size={12} className="text-slate-mid shrink-0" />
-        <p className="text-xs text-slate-mid">
-          Edited text uses Helvetica font. Original layout and positions are preserved.
-        </p>
+      <div className="flex items-center gap-1.5 px-1">
+        <Info size={11} className="text-slate-mid shrink-0" />
+        <p className="text-xs text-slate-mid">Original layout preserved. Edited text uses Helvetica font.</p>
       </div>
 
-      {/* PDF + overlays */}
-      <div className="card overflow-auto">
-        <div className="relative inline-block" style={{ minWidth: viewport?.width ?? 600 }}>
-          <canvas ref={canvasRef} className="block" />
+      {/* PDF with overlay */}
+      <div className="card overflow-auto p-0">
+        <div className="relative" style={{ width: canvasW, height: canvasH, minWidth: canvasW }}>
+          <canvas ref={canvasRef} style={{ position: 'absolute', top: 0, left: 0, display: 'block' }} />
 
-          {/* Overlay hit areas */}
-          <div className="absolute inset-0" style={{ pointerEvents: 'none' }}>
-            {textItems.map((item) => {
-              const isEdited = Boolean(edits[item.index])
-              const isActive = editing === item.index
-
-              return (
-                <div
-                  key={item.index}
-                  style={{
-                    position: 'absolute',
-                    left: item.x,
-                    top: item.y,
-                    width: item.w + 8,
-                    height: item.h + 4,
-                    pointerEvents: 'auto',
-                    cursor: 'text',
-                  }}
-                  onClick={() => !isActive && startEdit(item)}
-                >
-                  {isActive ? (
-                    <div style={{ position: 'absolute', top: -4, left: -2, zIndex: 50, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        ref={inputRef}
-                        value={editValue}
-                        onChange={e => setEditValue(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') commitEdit()
-                          if (e.key === 'Escape') cancelEdit()
-                        }}
-                        style={{
-                          fontSize: Math.max(item.fontSize * scale * 0.72, 10),
-                          padding: '1px 4px',
-                          border: '2px solid #6366f1',
-                          borderRadius: 4,
-                          outline: 'none',
-                          background: 'white',
-                          minWidth: Math.max(item.w, 80),
-                          boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
-                          fontFamily: 'Helvetica, Arial, sans-serif',
-                        }}
-                      />
-                      <button onClick={e => { e.stopPropagation(); commitEdit() }}
-                        style={{ width: 20, height: 20, background: '#16a34a', borderRadius: 4, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <Check size={11} color="white" />
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); cancelEdit() }}
-                        style={{ width: 20, height: 20, background: '#ef4444', borderRadius: 4, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <X size={11} color="white" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div
+          {textItems.map(item => {
+            const active = editing === item.idx
+            const edited = Boolean(edits[item.idx])
+            return (
+              <div key={item.idx} onClick={() => !active && startEdit(item)}
+                style={{
+                  position: 'absolute', left: item.x - 1, top: item.y - 1,
+                  width: item.w + 4, height: item.h + 2,
+                  cursor: 'text', zIndex: active ? 50 : 5,
+                }}>
+                {active ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 3, position: 'absolute', top: 0, left: 0, zIndex: 100, whiteSpace: 'nowrap' }}>
+                    <input ref={inputRef} value={editValue}
+                      onChange={e => setEditValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') cancel() }}
+                      onBlur={commit}
                       style={{
-                        width: '100%', height: '100%', borderRadius: 2,
-                        backgroundColor: isEdited ? 'rgba(99,102,241,0.15)' : 'transparent',
-                        border: isEdited ? '1px solid rgba(99,102,241,0.4)' : '1px solid transparent',
-                        transition: 'all 0.1s',
-                      }}
-                      onMouseEnter={e => {
-                        if (!isEdited) e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.08)'
-                        e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)'
-                      }}
-                      onMouseLeave={e => {
-                        e.currentTarget.style.backgroundColor = isEdited ? 'rgba(99,102,241,0.15)' : 'transparent'
-                        e.currentTarget.style.borderColor = isEdited ? 'rgba(99,102,241,0.4)' : 'transparent'
-                      }}
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                        height: Math.max(item.h + 6, 24),
+                        width: Math.max(item.w + 60, 140),
+                        fontSize: Math.max(item.fs * 0.95, 10),
+                        fontFamily: 'Helvetica, Arial, sans-serif',
+                        padding: '0 6px',
+                        border: '2.5px solid #6366f1',
+                        borderRadius: 5,
+                        outline: 'none',
+                        background: '#fff',
+                        color: '#111',
+                        boxShadow: '0 4px 20px rgba(0,0,0,0.22)',
+                      }} />
+                    <button onMouseDown={e => { e.preventDefault(); commit() }}
+                      style={{ width: 24, height: 24, background: '#16a34a', border: 'none', borderRadius: 5, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Check size={13} color="white" strokeWidth={3} />
+                    </button>
+                    <button onMouseDown={e => { e.preventDefault(); cancel() }}
+                      style={{ width: 24, height: 24, background: '#ef4444', border: 'none', borderRadius: 5, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <X size={13} color="white" strokeWidth={3} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{
+                    width: '100%', height: '100%', borderRadius: 2,
+                    background: edited ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    border: `1px solid ${edited ? 'rgba(99,102,241,0.45)' : 'transparent'}`,
+                    transition: 'background 0.1s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = edited ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.08)'; e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = edited ? 'rgba(99,102,241,0.15)' : 'transparent'; e.currentTarget.style.borderColor = edited ? 'rgba(99,102,241,0.45)' : 'transparent' }}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
