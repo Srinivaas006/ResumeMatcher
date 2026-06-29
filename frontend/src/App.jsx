@@ -11,7 +11,7 @@ const MODES = [
 ]
 
 export default function App() {
-  const { result, loading, error, analyze, reset } = useAnalyze()
+  const { result, loading, error, analyze, reset, resumeFile } = useAnalyze()
   const [mode, setMode] = useState('resume')
 
   function handleModeSwitch(m) {
@@ -21,7 +21,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-faint">
-      {/* Top bar */}
       <header className="border-b border-slate-light bg-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -35,17 +34,13 @@ export default function App() {
       </header>
 
       <main className="max-w-2xl mx-auto px-6 py-8">
-        {/* Mode Switcher */}
         <div className="flex gap-1 p-1 bg-white border border-slate-light rounded-2xl mb-8 shadow-sm">
           {MODES.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => handleModeSwitch(key)}
               className={`flex-1 py-2.5 px-4 text-xs font-semibold rounded-xl transition-all flex items-center justify-center gap-2
-                ${mode === key
-                  ? 'bg-accent text-white shadow-sm'
-                  : 'text-slate-mid hover:text-ink'
-                }`}
+                ${mode === key ? 'bg-accent text-white shadow-sm' : 'text-slate-mid hover:text-ink'}`}
             >
               <Icon size={13} />
               {label}
@@ -53,7 +48,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* Resume Matcher Mode */}
         {mode === 'resume' && (
           <>
             {!result && !loading && (
@@ -67,15 +61,13 @@ export default function App() {
                 </p>
               </div>
             )}
-
             {error && (
               <div className="mb-6 p-4 bg-signal-red_bg border border-red-200 rounded-2xl text-sm text-signal-red">
                 <strong>Error:</strong> {error}
               </div>
             )}
-
             {result ? (
-              <ResultsPanel result={result} onReset={reset} />
+              <ResultsPanel result={result} onReset={reset} resumeFile={resumeFile} />
             ) : (
               <div className="card p-6">
                 <UploadForm onSubmit={analyze} loading={loading} />
@@ -84,7 +76,6 @@ export default function App() {
           </>
         )}
 
-        {/* GitHub Analyzer Mode */}
         {mode === 'github' && (
           <>
             {!result && (
@@ -104,7 +95,7 @@ export default function App() {
       </main>
 
       <footer className="text-center py-8 text-xs text-slate-mid">
-        Powered by Groq · llama3-70b
+        Powered by Gemini · gemini-2.0-flash-lite
       </footer>
     </div>
   )
