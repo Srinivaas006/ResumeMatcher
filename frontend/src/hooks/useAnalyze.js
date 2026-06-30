@@ -5,11 +5,13 @@ export function useAnalyze() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [resumeFile, setResumeFile] = useState(null)
 
   async function analyze(resumeFile, jobDescription) {
     setLoading(true)
     setError(null)
     setResult(null)
+    setResumeFile(resumeFile)
     try {
       const data = await analyzeResume(resumeFile, jobDescription)
       setResult(data)
@@ -23,7 +25,8 @@ export function useAnalyze() {
   function reset() {
     setResult(null)
     setError(null)
+    setResumeFile(null)
   }
 
-  return { result, loading, error, analyze, reset }
+  return { result, loading, error, analyze, reset, resumeFile }
 }
