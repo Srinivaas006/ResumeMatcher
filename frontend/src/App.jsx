@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
-import { Zap, Github, FileSearch } from 'lucide-react'
+import { Zap, Github, FileSearch, ArrowLeft } from 'lucide-react'
 import UploadForm from './components/UploadForm'
 import ResultsPanel from './components/ResultsPanel'
 import GitHubPanel from './components/GitHubPanel'
+import LandingPage from './components/LandingPage'
 import { useAnalyze } from './hooks/useAnalyze'
 
 const MODES = [
@@ -13,23 +14,37 @@ const MODES = [
 export default function App() {
   const { result, loading, error, analyze, reset, resumeFile } = useAnalyze()
   const [mode, setMode] = useState('resume')
+  const [page, setPage] = useState('home') // 'home' | 'app'
 
   function handleModeSwitch(m) {
     setMode(m)
     reset()
   }
 
+  if (page === 'home') {
+    return <LandingPage onGetStarted={() => setPage('app')} />
+  }
+
   return (
     <div className="min-h-screen bg-slate-faint">
       <header className="border-b border-slate-light bg-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setPage('home')}
+            className="flex items-center gap-2.5 group"
+          >
             <div className="w-7 h-7 bg-accent rounded-lg flex items-center justify-center">
               <Zap size={14} className="text-white" />
             </div>
             <span className="font-bold text-ink tracking-tight">ResumeMatcher</span>
-          </div>
-          <span className="text-xs text-slate-mid font-medium hidden sm:block">AI Career Tools</span>
+          </button>
+          <button
+            onClick={() => setPage('home')}
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-mid hover:text-ink transition-colors"
+          >
+            <ArrowLeft size={13} />
+            Home
+          </button>
         </div>
       </header>
 
