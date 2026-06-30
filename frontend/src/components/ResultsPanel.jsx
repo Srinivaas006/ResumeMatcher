@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { CheckCircle2, XCircle, TrendingUp, AlertTriangle, Lightbulb, Tag, MessageSquare, RotateCcw } from 'lucide-react'
 import ScoreRing from './ScoreRing'
 import RoadmapPanel from './RoadmapPanel'
-import PDFEditor from './PDFEditor'
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
@@ -10,7 +9,6 @@ const TABS = [
   { key: 'roadmap', label: '🗺 Roadmap' },
   { key: 'improvements', label: 'Resume Fix' },
   { key: 'interview', label: 'Interview' },
-  { key: 'editpdf', label: '✏️ Edit PDF' },
 ]
 
 function importanceBadge(imp) {
@@ -22,7 +20,7 @@ function importanceBadge(imp) {
   return map[imp] || 'bg-slate-light text-ink-muted'
 }
 
-export default function ResultsPanel({ result, onReset, resumeFile }) {
+export default function ResultsPanel({ result, onReset }) {
   const [tab, setTab] = useState('overview')
   const missingSkillNames = (result.missing_skills || []).map(s => s.skill)
 
@@ -56,11 +54,6 @@ export default function ResultsPanel({ result, onReset, resumeFile }) {
         )}
         {tab === 'improvements' && <ImprovementsTab result={result} />}
         {tab === 'interview' && <InterviewTab result={result} />}
-        {tab === 'editpdf' && (
-          resumeFile
-            ? <PDFEditor pdfFile={resumeFile} />
-            : <div className="card p-6 text-center text-sm text-ink-muted">No PDF available. Re-upload your resume.</div>
-        )}
       </div>
 
       <button onClick={onReset}
