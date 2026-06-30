@@ -53,3 +53,20 @@ export async function analyzeGitHub(username, targetRole = '') {
 
   return res.json()
 }
+
+export async function extractEditable(resumeFile) {
+  const form = new FormData()
+  form.append('resume', resumeFile)
+
+  const res = await fetch(`${API_URL}/extract-editable`, {
+    method: 'POST',
+    body: form,
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(err.detail || `Server error ${res.status}`)
+  }
+
+  return res.json()
+}
