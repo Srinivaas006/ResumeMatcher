@@ -8,3 +8,4 @@ sqlalchemy==2.0.31
 alembic==1.13.2
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
+greenlet==3.1.1
