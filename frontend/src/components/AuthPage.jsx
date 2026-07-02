@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Zap, Mail, Lock, User, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { login, signup } from '../lib/auth'
 
-export default function AuthPage({ onAuth }) {
+export default function AuthPage({ onAuth, onBack }) {
   const [mode, setMode] = useState('login')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -34,6 +34,11 @@ export default function AuthPage({ onAuth }) {
     <div className="min-h-screen bg-slate-faint flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
+          {onBack && (
+            <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-slate-mid hover:text-ink transition-colors mb-4 mx-auto">
+              ← Back to Home
+            </button>
+          )}
           <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center mx-auto mb-4">
             <Zap size={20} className="text-white" />
           </div>

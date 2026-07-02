@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Zap, Github, FileSearch, ArrowLeft, Clock, LogOut, User } from 'lucide-react'
+import { Zap, Github, FileSearch, Clock, LogOut, User } from 'lucide-react'
 import UploadForm from './components/UploadForm'
 import ResultsPanel from './components/ResultsPanel'
 import GitHubPanel from './components/GitHubPanel'
@@ -15,20 +15,52 @@ const MODES = [
   { key: 'history', label: 'My History', icon: Clock },
 ]
 
+function getInitialPage() {
+  const saved = localStorage.getItem('rm_page')
+  if (saved === 'app' || saved === 'auth') return saved
+  return 'home'
+}
+
 export default function App() {
   const { result, loading, error, analyze, reset, resumeFile } = useAnalyze()
   const [mode, setMode] = useState('resume')
-  const [page, setPage] = useState('home')
+  const [page, setPage] = useState(getInitialPage)
   const [user, setUser] = useState(getUser())
   const [savedId, setSavedId] = useState(null)
+  const [lastJD, setLastJD] = useState('')
+
+  async function handleAnalyze(resumeFile, jobDescription) {
+    setLastJD(jobDescription)
+    analyze(resumeFile, jobDescription)
+  }
+
+  // Sync page to localStorage so refresh restores it
+  function navigateTo(p) {
+    localStorage.setItem('rm_page', p)
+    setPage(p)
+    window.history.pushState({ page: p }, '', window.location.pathname)
+  }
+
+  // Handle browser back/forward
+  useEffect(() => {
+    function onPopState(e) {
+      const p = e.state?.page || 'home'
+      localStorage.setItem('rm_page', p)
+      setPage(p)
+    }
+    window.addEventListener('popstate', onPopState)
+    // Set initial history entry so back button works from app → home
+    if (window.history.state === null) {
+      window.history.replaceState({ page }, '', window.location.pathname)
+    }
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
 
   useEffect(() => {
     if (result && isLoggedIn()) {
-      const jdEl = document.querySelector('textarea[data-jd]')
-      const jd = jdEl?.value || ''
       saveAnalysis({
-        jobTitle: extractTitle(result) || 'Untitled Role',
-        jobDescription: jd,
+        jobTitle: extractTitleFromJD(lastJD) || extractTitle(result) || 'Untitled Role',
+        jobDescription: lastJD,
         resumeText: '',
         score: result.overall_score,
         verdict: result.verdict,
@@ -36,6 +68,12 @@ export default function App() {
       }).then(saved => { if (saved) setSavedId(saved.id) })
     }
   }, [result])
+
+  function extractTitleFromJD(jd) {
+    if (!jd) return ''
+    const match = jd.match(/(?:position|role|job title|title)[:\s]+([A-Za-z][A-Za-z\s]+?)(?:\n|,|\.|at )/i)
+    return match?.[1]?.trim().slice(0, 80) || jd.split('\n')[0].trim().slice(0, 60)
+  }
 
   function extractTitle(r) {
     const summary = r?.summary || ''
@@ -51,30 +89,26 @@ export default function App() {
 
   function handleAuth() {
     setUser(getUser())
-    setPage('app')
+    navigateTo('app')
   }
 
   function handleLogout() {
     logout()
     setUser(null)
-    setPage('home')
+    navigateTo('home')
     reset()
   }
 
   function handleLoadFromHistory(detail) {
-    try {
-      const parsed = JSON.parse(detail.result_json)
-      setMode('resume')
-    } catch (e) {}
     setMode('resume')
   }
 
   if (page === 'home') {
-    return <LandingPage onGetStarted={() => setPage(isLoggedIn() ? 'app' : 'auth')} />
+    return <LandingPage onGetStarted={() => navigateTo(isLoggedIn() ? 'app' : 'auth')} />
   }
 
   if (page === 'auth') {
-    return <AuthPage onAuth={handleAuth} />
+    return <AuthPage onAuth={handleAuth} onBack={() => navigateTo('home')} />
   }
 
   return (
@@ -82,7 +116,7 @@ export default function App() {
       <header className="border-b border-slate-light bg-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
           <button
-            onClick={() => setPage('home')}
+            onClick={() => navigateTo('home')}
             className="flex items-center gap-2.5 group"
           >
             <div className="w-7 h-7 bg-accent rounded-lg flex items-center justify-center">
@@ -108,7 +142,7 @@ export default function App() {
               </button>
             ) : (
               <button
-                onClick={() => setPage('auth')}
+                onClick={() => navigateTo('auth')}
                 className="text-xs font-semibold text-accent hover:text-accent-hover transition-colors"
               >
                 Sign in
@@ -163,7 +197,7 @@ export default function App() {
               </>
             ) : (
               <div className="card p-6">
-                <UploadForm onSubmit={analyze} loading={loading} />
+                <UploadForm onSubmit={handleAnalyze} loading={loading} />
               </div>
             )}
           </>
@@ -171,17 +205,15 @@ export default function App() {
 
         {mode === 'github' && (
           <>
-            {(
-              <div className="mb-8">
-                <h1 className="text-2xl font-bold text-ink mb-2 tracking-tight">
-                  Is your GitHub recruiter-ready?
-                </h1>
-                <p className="text-sm text-ink-muted leading-relaxed">
-                  Enter your GitHub username and get detailed feedback on your repos, README quality,
-                  profile bio, and what to fix before applying for jobs.
-                </p>
-              </div>
-            )}
+            <div className="mb-8">
+              <h1 className="text-2xl font-bold text-ink mb-2 tracking-tight">
+                Is your GitHub recruiter-ready?
+              </h1>
+              <p className="text-sm text-ink-muted leading-relaxed">
+                Enter your GitHub username and get detailed feedback on your repos, README quality,
+                profile bio, and what to fix before applying for jobs.
+              </p>
+            </div>
             <GitHubPanel />
           </>
         )}
@@ -194,7 +226,7 @@ export default function App() {
                 <p className="text-sm font-semibold text-ink mb-2">Sign in to see your history</p>
                 <p className="text-xs text-slate-mid mb-4">Your analyses are saved automatically when you're logged in.</p>
                 <button
-                  onClick={() => setPage('auth')}
+                  onClick={() => navigateTo('auth')}
                   className="px-4 py-2 bg-accent text-white text-xs font-semibold rounded-xl hover:bg-accent-hover transition-colors"
                 >
                   Sign In

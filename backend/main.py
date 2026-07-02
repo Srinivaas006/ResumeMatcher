@@ -134,30 +134,36 @@ Return ONLY a valid JSON object (no markdown) with this exact structure:
         raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
 
     # ── Calculate score in Python, not AI ──
-    matched = len(result.get("matched_skills", []))
-    missing = result.get("missing_skills", [])
+    matched_skills = result.get("matched_skills", [])
+    missing_skills = result.get("missing_skills", [])
+
+    # Handle both list-of-dicts and list-of-strings
+    matched = len(matched_skills) if isinstance(matched_skills, list) else 0
+    missing = missing_skills if isinstance(missing_skills, list) else []
     total_skills = matched + len(missing)
 
-    # Base score from skill match ratio
+    print(f"DEBUG score: matched={matched}, missing={len(missing)}, total={total_skills}")
+
     if total_skills == 0:
         skill_ratio = 0.5
     else:
         skill_ratio = matched / total_skills
 
-    base = round(skill_ratio * 70)  # max 70 from skills
+    base = round(skill_ratio * 70)
 
-    # Bonus points
-    critical_missing = sum(1 for s in missing if s.get("importance") == "Critical")
-    high_missing = sum(1 for s in missing if s.get("importance") == "High")
+    critical_missing = sum(1 for s in missing if (isinstance(s, dict) and s.get("importance") == "Critical"))
+    high_missing = sum(1 for s in missing if (isinstance(s, dict) and s.get("importance") == "High"))
 
     bonus = 0
-    if critical_missing == 0: bonus += 15   # no critical gaps
+    if critical_missing == 0: bonus += 15
     elif critical_missing == 1: bonus += 8
     if high_missing == 0: bonus += 10
     elif high_missing <= 2: bonus += 5
-    if matched >= 8: bonus += 5             # strong skill breadth
+    if matched >= 8: bonus += 5
 
     overall_score = min(base + bonus, 100)
+
+    print(f"DEBUG score: base={base}, bonus={bonus}, final={overall_score}")
 
     # Verdict based on score
     if overall_score >= 80:   verdict = "Strong Match"
@@ -600,8 +606,8 @@ async def get_history_item(
 @app.post("/analyze/save")
 async def save_analysis(
     job_title: str = Form(...),
-    job_description: str = Form(...),
-    resume_text: str = Form(...),
+    job_description: str = Form(default=""),
+    resume_text: str = Form(default=""),
     score: int = Form(...),
     verdict: str = Form(...),
     result_json: str = Form(...),
