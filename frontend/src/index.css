@@ -37,4 +37,11 @@
   .section-title {
     @apply text-xs font-semibold uppercase tracking-widest text-slate-mid mb-4;
   }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }

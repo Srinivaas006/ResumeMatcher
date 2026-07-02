@@ -19,8 +19,8 @@ const FEATURES = [
   },
   {
     icon: FileEdit,
-    title: 'Edit & Export',
-    desc: 'Touch up your resume right in the browser and download it — no extra software.',
+    title: 'Skill Gap Roadmap',
+    desc: 'See exactly which skills are missing and get a week-by-week plan to close the gap.',
   },
 ]
 

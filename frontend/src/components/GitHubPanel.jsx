@@ -282,7 +282,7 @@ export default function GitHubPanel() {
       )}
 
       <button
-        onClick={() => { setResult(null); setUsername(''); setTargetRole('') }}
+        onClick={() => { setResult(null) }}
         className="w-full py-3 text-sm text-slate-mid hover:text-ink font-medium
                    flex items-center justify-center gap-2 transition-colors"
       >

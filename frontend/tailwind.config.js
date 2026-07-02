@@ -35,6 +35,7 @@ export default {
       animation: {
         'fade-up': 'fadeUp 0.4s ease forwards',
         'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
+        'fade-in': 'fadeIn 0.3s ease forwards',
       },
       keyframes: {
         fadeUp: {
@@ -44,6 +45,10 @@ export default {
         pulseSoft: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.5' },
+        },
+        fadeIn: {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
         }
       }
     },

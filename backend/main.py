@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 
 
 async def call_gemini(prompt: str) -> str:
@@ -501,3 +501,139 @@ Return ONLY valid JSON (no markdown):
         raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
 
     return JSONResponse(content=result)
+
+# ─────────────────────────────────────────────
+# AUTH & HISTORY ROUTES
+# ─────────────────────────────────────────────
+from contextlib import asynccontextmanager
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from fastapi import Depends
+from fastapi.security import HTTPBearer
+
+from database import get_db, init_db
+from models import User, AnalysisHistory
+from schemas import SignupRequest, LoginRequest, TokenResponse, AnalysisHistoryItem, AnalysisHistoryDetail
+from auth import hash_password, verify_password, create_access_token, get_current_user
+
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+
+@app.post("/auth/signup", response_model=TokenResponse)
+async def signup(body: SignupRequest, db: AsyncSession = Depends(get_db)):
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    user = User(
+        email=body.email,
+        name=body.name.strip(),
+        hashed_password=hash_password(body.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    token = create_access_token(user.id, user.email)
+    return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if not user or not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token(user.id, user.email)
+    return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
+
+
+@app.get("/auth/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "name": current_user.name, "email": current_user.email}
+
+
+@app.get("/history", response_model=list[AnalysisHistoryItem])
+async def get_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AnalysisHistory)
+        .where(AnalysisHistory.user_id == current_user.id)
+        .order_by(AnalysisHistory.analyzed_at.desc())
+        .limit(50)
+    )
+    return result.scalars().all()
+
+
+@app.get("/history/{item_id}", response_model=AnalysisHistoryDetail)
+async def get_history_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AnalysisHistory).where(
+            AnalysisHistory.id == item_id,
+            AnalysisHistory.user_id == current_user.id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    return item
+
+
+@app.post("/analyze/save")
+async def save_analysis(
+    job_title: str = Form(...),
+    job_description: str = Form(...),
+    resume_text: str = Form(...),
+    score: int = Form(...),
+    verdict: str = Form(...),
+    result_json: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    item = AnalysisHistory(
+        user_id=current_user.id,
+        job_title=job_title,
+        job_description=job_description,
+        resume_text=resume_text,
+        score=score,
+        verdict=verdict,
+        result_json=result_json,
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return {"id": item.id, "saved": True}
+
+
+@app.delete("/history/{item_id}")
+async def delete_history_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AnalysisHistory).where(
+            AnalysisHistory.id == item_id,
+            AnalysisHistory.user_id == current_user.id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.delete(item)
+    await db.commit()
+    return {"deleted": True}

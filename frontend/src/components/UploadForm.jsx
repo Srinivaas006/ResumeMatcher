@@ -1,7 +1,9 @@
 import React, { useState, useRef } from 'react'
 import { Upload, FileText, X, Loader2 } from 'lucide-react'
+import { useLoadingMessages } from '../hooks/useLoadingMessages'
 
 export default function UploadForm({ onSubmit, loading }) {
+  const loadingMessage = useLoadingMessages(loading)
   const [resume, setResume] = useState(null)
   const [jd, setJd] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -103,7 +105,7 @@ export default function UploadForm({ onSubmit, loading }) {
         {loading ? (
           <>
             <Loader2 size={16} className="animate-spin" />
-            Analyzing…
+            <span key={loadingMessage} className="animate-fade-in">{loadingMessage}</span>
           </>
         ) : (
           'Analyze Match'
