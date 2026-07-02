@@ -12,9 +12,9 @@ const MODES = [
 ]
 
 export default function App() {
-  const { result, loading, error, analyze, reset } = useAnalyze()
+  const { result, loading, error, analyze, reset, resumeFile } = useAnalyze()
   const [mode, setMode] = useState('resume')
-  const [page, setPage] = useState('home')
+  const [page, setPage] = useState('home') // 'home' | 'app'
 
   function handleModeSwitch(m) {
     setMode(m)
@@ -29,14 +29,19 @@ export default function App() {
     <div className="min-h-screen bg-slate-faint">
       <header className="border-b border-slate-light bg-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
-          <button onClick={() => setPage('home')} className="flex items-center gap-2.5 group">
+          <button
+            onClick={() => setPage('home')}
+            className="flex items-center gap-2.5 group"
+          >
             <div className="w-7 h-7 bg-accent rounded-lg flex items-center justify-center">
               <Zap size={14} className="text-white" />
             </div>
             <span className="font-bold text-ink tracking-tight">ResumeMatcher</span>
           </button>
-          <button onClick={() => setPage('home')}
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-mid hover:text-ink transition-colors">
+          <button
+            onClick={() => setPage('home')}
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-mid hover:text-ink transition-colors"
+          >
             <ArrowLeft size={13} />
             Home
           </button>
@@ -46,9 +51,12 @@ export default function App() {
       <main className="max-w-2xl mx-auto px-6 py-8">
         <div className="flex gap-1 p-1 bg-white border border-slate-light rounded-2xl mb-8 shadow-sm">
           {MODES.map(({ key, label, icon: Icon }) => (
-            <button key={key} onClick={() => handleModeSwitch(key)}
+            <button
+              key={key}
+              onClick={() => handleModeSwitch(key)}
               className={`flex-1 py-2.5 px-4 text-xs font-semibold rounded-xl transition-all flex items-center justify-center gap-2
-                ${mode === key ? 'bg-accent text-white shadow-sm' : 'text-slate-mid hover:text-ink'}`}>
+                ${mode === key ? 'bg-accent text-white shadow-sm' : 'text-slate-mid hover:text-ink'}`}
+            >
               <Icon size={13} />
               {label}
             </button>
@@ -74,7 +82,7 @@ export default function App() {
               </div>
             )}
             {result ? (
-              <ResultsPanel result={result} onReset={reset} />
+              <ResultsPanel result={result} onReset={reset} resumeFile={resumeFile} />
             ) : (
               <div className="card p-6">
                 <UploadForm onSubmit={analyze} loading={loading} />

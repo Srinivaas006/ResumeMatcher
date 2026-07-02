@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
 
 async def call_gemini(prompt: str) -> str:
@@ -321,29 +321,33 @@ async def analyze_github(
     has_location = bool((user_data.get("location") or "").strip())
     has_blog = bool((user_data.get("blog") or "").strip())
 
-    # ── Calculate score entirely in Python (not AI) ──
+    # ── Score in Python — student-fair rubric ──
+
     # Bio completeness (0-15)
+    # Bio is most important — name alone gives decent score
     bio_score = 0
-    if has_bio: bio_score += 8
-    if has_name: bio_score += 3
-    if has_location: bio_score += 2
-    if has_blog: bio_score += 2
+    if has_name: bio_score += 5        # having a real name set
+    if has_bio: bio_score += 7         # bio description
+    if has_blog: bio_score += 2        # portfolio/website
+    if has_location: bio_score += 1    # location (optional, low weight)
     bio_score = min(bio_score, 15)
 
     # Repo count — original only (0-15)
-    if original_repos == 0:   repo_count_score = 0
-    elif original_repos <= 2: repo_count_score = 4
-    elif original_repos <= 5: repo_count_score = 8
-    elif original_repos <= 10: repo_count_score = 12
+    # Students typically have 3-8 repos — be fair
+    if original_repos == 0:    repo_count_score = 0
+    elif original_repos == 1:  repo_count_score = 4
+    elif original_repos <= 3:  repo_count_score = 8
+    elif original_repos <= 6:  repo_count_score = 11
+    elif original_repos <= 10: repo_count_score = 13
     else:                      repo_count_score = 15
 
     # Repo quality — descriptions + topics (0-20)
     desc_ratio = repos_with_desc / max(len(repo_summaries), 1)
     topics_count = sum(1 for r in repo_summaries if r["has_topics"])
-    repo_quality_score = round(desc_ratio * 12) + min(topics_count * 2, 8)
+    repo_quality_score = round(desc_ratio * 14) + min(topics_count * 2, 6)
     repo_quality_score = min(repo_quality_score, 20)
 
-    # README quality (0-20) — only score against repos actually checked (top 5)
+    # README quality (0-20) — only score checked repos
     checked_repos = [r for r in repo_summaries if r["name"] in readme_map]
     num_checked = len(checked_repos)
     repos_with_readme = sum(1 for r in checked_repos if r["has_readme"])
@@ -357,15 +361,17 @@ async def analyze_github(
     # Tech diversity (0-15)
     num_langs = len(languages_used)
     if num_langs == 0:   tech_score = 0
-    elif num_langs == 1: tech_score = 4
-    elif num_langs == 2: tech_score = 8
-    elif num_langs == 3: tech_score = 11
+    elif num_langs == 1: tech_score = 6
+    elif num_langs == 2: tech_score = 10
+    elif num_langs == 3: tech_score = 13
     else:                tech_score = 15
 
     # Stars / engagement (0-15)
-    if total_stars == 0:    stars_score = 2
-    elif total_stars <= 5:  stars_score = 6
-    elif total_stars <= 20: stars_score = 11
+    # Most students have 0 stars — don't punish, give base points
+    if total_stars == 0:    stars_score = 5   # base: shows they're active
+    elif total_stars <= 3:  stars_score = 8
+    elif total_stars <= 10: stars_score = 11
+    elif total_stars <= 30: stars_score = 13
     else:                   stars_score = 15
 
     score_breakdown = {
@@ -377,85 +383,103 @@ async def analyze_github(
         "community_engagement": stars_score,
     }
     overall_score = sum(score_breakdown.values())
-    if overall_score >= 85:   grade = "A"
-    elif overall_score >= 70: grade = "B"
-    elif overall_score >= 50: grade = "C"
+
+    # Student-fair grade boundaries
+    if overall_score >= 80:   grade = "A"
+    elif overall_score >= 62: grade = "B"
+    elif overall_score >= 44: grade = "C"
     else:                     grade = "D"
 
     readme_quality_label = (
         "Excellent" if readme_score >= 18 else
-        "Good" if readme_score >= 14 else
-        "Basic" if readme_score >= 8 else
+        "Good" if readme_score >= 12 else
+        "Basic" if readme_score >= 6 else
         "Poor"
     )
 
     profile_data = {
         "username": username,
-        "name": user_data.get("name") or "",
-        "bio": user_data.get("bio") or "NO BIO SET",
+        "name": user_data.get("name") or "NOT SET",
+        "bio": user_data.get("bio") or "NOT SET",
         "public_repos": user_data.get("public_repos", 0),
         "followers": user_data.get("followers", 0),
-        "blog_or_portfolio": user_data.get("blog") or "NONE",
+        "blog_or_portfolio": user_data.get("blog") or "NOT SET",
+        "location": user_data.get("location") or "NOT SET",
         "stats": {
+            "total_public_repos": total_repos,
             "original_repos": original_repos,
+            "forked_repos": total_repos - original_repos,
             "repos_with_description": repos_with_desc,
+            "repos_without_description": len(repo_summaries) - repos_with_desc,
+            "repos_checked_for_readme": num_checked,
             "repos_with_readme": repos_with_readme,
+            "repos_without_readme": num_checked - repos_with_readme,
             "total_stars": total_stars,
             "languages_used": languages_used,
+            "num_languages": num_langs,
         },
         "repos": repo_summaries,
     }
 
     prompt = f"""
-You are a technical recruiter giving feedback on a student's GitHub profile.
+You are a senior technical recruiter reviewing a student's GitHub profile for job applications.
 {"Target role: " + target_role if target_role else "General software developer role."}
 
-PROFILE DATA:
+REAL PROFILE DATA (fetched live):
 {json.dumps(profile_data, indent=2)}
 
-SCORES (already calculated — do NOT change these numbers):
-- Overall: {overall_score}/100  Grade: {grade}
-- Bio completeness: {bio_score}/15
-- Repo count: {repo_count_score}/15
-- Repo quality: {repo_quality_score}/20
-- README quality: {readme_score}/20
-- Tech diversity: {tech_score}/15
-- Community engagement: {stars_score}/15
+PRE-CALCULATED SCORES (do NOT change these numbers — just use them to write feedback):
+Overall: {overall_score}/100  Grade: {grade}
+- Bio & Profile: {bio_score}/15
+- Repo Count: {repo_count_score}/15
+- Repo Quality (descriptions/topics): {repo_quality_score}/20
+- README Quality: {readme_score}/20
+- Tech Diversity: {tech_score}/15
+- Stars & Engagement: {stars_score}/15
 
-Your job is ONLY to write the text feedback based on these scores and the profile data above.
-Reference actual repo names and real numbers in your feedback.
+Write SPECIFIC, ACTIONABLE feedback. Do NOT write vague things like "improve your profile."
+Instead, say EXACTLY what is missing and EXACTLY what to do — reference actual repo names, actual numbers from the data.
 
-Return ONLY a valid JSON object (no markdown):
+For weaknesses: be direct. If bio is not set, say "Your bio is completely empty — recruiters skip profiles with no bio."
+For action items: give the exact step. "Add a description to your ResumeMatcher repo explaining what it does and the tech stack."
+For bio_suggestion: write an actual ready-to-use bio based on their repos and languages. Make it 1-2 lines, professional.
+
+Return ONLY valid JSON (no markdown):
 {{
   "overall_score": {overall_score},
   "grade": "{grade}",
   "score_breakdown": {json.dumps(score_breakdown)},
-  "summary": "<2-3 sentences referencing actual repo names and stats>",
+  "summary": "<2-3 sentences using actual numbers: X original repos, Y languages, Z stars etc>",
   "profile_strengths": [
-    {{"title": "<strength>", "detail": "<cite specific repo names or actual numbers>"}}
+    {{"title": "<strength>", "detail": "<cite the actual repo name or stat that shows this strength>"}}
   ],
   "profile_weaknesses": [
-    {{"title": "<weakness>", "detail": "<specific missing thing and its impact>"}}
+    {{"title": "<weakness>", "detail": "<exactly what is missing and why it hurts with recruiters>"}}
   ],
   "top_repos": [
     {{
-      "name": "<actual repo name from the data>",
-      "why": "<specific observation>",
-      "improvement": "<one concrete fix>"
+      "name": "<exact repo name from data>",
+      "why": "<what stands out — good or bad>",
+      "improvement": "<one precise thing to add or fix in this repo>"
     }}
   ],
   "readme_quality": "{readme_quality_label}",
-  "readme_tips": ["<tip1>", "<tip2>"],
-  "missing_for_role": ["<gap1 for target role>", "<gap2>"],
+  "readme_tips": [
+    "<exact section to add to README e.g. 'Add a Screenshots section showing the app UI'>",
+    "<another exact tip>"
+  ],
+  "missing_for_role": [
+    "<specific thing missing for {target_role if target_role else 'a developer role'} e.g. 'No deployed project links anywhere'>"
+  ],
   "action_items": [
     {{
       "priority": "<High|Medium|Low>",
-      "action": "<specific action>",
-      "impact": "<why recruiters care>"
+      "action": "<exact step e.g. 'Go to github.com/settings/profile and fill in your bio with your tech stack and goals'>",
+      "impact": "<what recruiter thinks when they see this missing>"
     }}
   ],
-  "bio_suggestion": "<rewritten bio using their actual languages and projects>",
-  "pinned_repos_suggestion": "<name actual repos from data that should be pinned and why>"
+  "bio_suggestion": "<write a ready-to-use 1-2 line bio based on their actual repos and languages>",
+  "pinned_repos_suggestion": "<name 3-6 actual repos from the data that should be pinned, explain why each one>"
 }}
 """
 
@@ -466,7 +490,7 @@ Return ONLY a valid JSON object (no markdown):
         if json_match:
             cleaned = json_match.group(0)
         result = json.loads(cleaned)
-        # Always enforce Python-calculated scores regardless of what AI returns
+        # Always enforce Python-calculated scores
         result["overall_score"] = overall_score
         result["grade"] = grade
         result["score_breakdown"] = score_breakdown
